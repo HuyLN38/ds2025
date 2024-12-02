@@ -11,4 +11,4 @@ Student Info
 
 * Student Name: Lý Nhật Huy
 * Student ID: 22BI13191
-* Student Group ID: 6
+* Student Group ID: 5
