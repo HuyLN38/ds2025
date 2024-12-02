@@ -32,6 +32,10 @@ if __name__ == "__main__":
         sor = input()
         args.sor = sor
 
+        print("Enter filename : ", end="")
+        fn = input()
+        args.fn = fn
+
     else:
         print("Invalid mode")
         exit()
