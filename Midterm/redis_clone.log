@@ -1,0 +1,17 @@
+2024-12-31 21:00:25,004 - INFO - Set key mykey without TTL
+2024-12-31 21:00:28,958 - INFO - Snapshot saved successfully
+2024-12-31 21:00:58,962 - INFO - Snapshot saved successfully
+2024-12-31 21:01:28,963 - INFO - Snapshot saved successfully
+2024-12-31 21:01:35,537 - INFO - Deleted key: mykey
+2024-12-31 21:01:40,745 - INFO - Key not found: mykey
+2024-12-31 21:01:58,964 - INFO - Snapshot saved successfully
+2024-12-31 21:02:28,965 - INFO - Snapshot saved successfully
+2024-12-31 21:02:58,967 - INFO - Snapshot saved successfully
+2024-12-31 21:03:28,968 - INFO - Snapshot saved successfully
+2024-12-31 21:03:58,971 - INFO - Snapshot saved successfully
+2024-12-31 21:04:28,972 - INFO - Snapshot saved successfully
+2024-12-31 21:04:58,975 - INFO - Snapshot saved successfully
+2024-12-31 21:05:28,977 - INFO - Snapshot saved successfully
+2024-12-31 21:05:58,978 - INFO - Snapshot saved successfully
+2024-12-31 21:06:28,979 - INFO - Snapshot saved successfully
+2024-12-31 21:06:58,981 - INFO - Snapshot saved successfully

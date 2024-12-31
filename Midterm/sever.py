@@ -1,4 +1,4 @@
-from Mid.redis import FaultTolerantRedisClone
+from redis import FaultTolerantRedisClone
 from rpc import RPCServer
 
 server = RPCServer('127.0.0.1', 8080)

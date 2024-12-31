@@ -3,15 +3,17 @@ import threading
 import time
 import json
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import logging
 from collections import defaultdict
 
 class FaultTolerantRedisClone:
     def __init__(self, snapshot_interval: int = 30, snapshot_file: str = "redis_snapshot.json"):
         self.data_store: Dict[str, Any] = {}
-        self.expiry_times: Dict[str, float] = {}  # Lưu thời gian hết hạn cho các key
+        self.sorted_sets: Dict[str, List[tuple]] = {} 
+        self.expiry_times: Dict[str, float] = {} 
         self.lock = threading.RLock()  # Reentrant lock for thread safety
+        self.lock_list = threading.Lock()
         self.snapshot_interval = snapshot_interval
         self.snapshot_file = snapshot_file
         self.last_snapshot_time = time.time()
@@ -26,7 +28,7 @@ class FaultTolerantRedisClone:
         # Load existing data if available
         self._load_snapshot()
         
-        # Xử lí key hết hạn 
+        #Key handle expires
         self.cleanup_thread = threading.Thread(target=self._cleanup_expired_keys, daemon=True)
         self.cleanup_thread.start()
 
@@ -35,9 +37,9 @@ class FaultTolerantRedisClone:
         self.snapshot_thread.start()
 
     def _cleanup_expired_keys(self):
-        """Xóa các key đã hết hạn"""
+        """Remove keys that have expired."""
         while True:
-            time.sleep(1)  # Kiểm tra mỗi giây
+            time.sleep(1)  # Check every second
             with self.lock:
                 current_time = time.time()
                 expired_keys = [
@@ -59,6 +61,7 @@ class FaultTolerantRedisClone:
                     self.expiry_times = {
                         k: float(v) for k, v in snapshot_data.get('expiry', {}).items()
                     }
+                    self.sorted_sets = snapshot_data.get('sorted_sets', {})
                 logging.info(f"Loaded snapshot from {self.snapshot_file}")
         except Exception as e:
             logging.error(f"Error loading snapshot: {str(e)}")
@@ -69,7 +72,8 @@ class FaultTolerantRedisClone:
             with self.lock:
                 snapshot_data = {
                     'data': self.data_store,
-                    'expiry': self.expiry_times
+                    'expiry': self.expiry_times,
+                    'sorted_sets': self.sorted_sets 
                 }
                 with open(self.snapshot_file, 'w') as f:
                     json.dump(snapshot_data, f)
@@ -238,17 +242,271 @@ class FaultTolerantRedisClone:
             logging.error(f"Error persisting key {key}: {str(e)}")
             raise
 
-    def exists(self, key: str) -> str:
-        """Check key exists in data store."""
+        #  Hash 
+    def hset(self, hash_key: str, field: str, value: Any) -> str:   
+        """Set a field in a hash stored at hash_key"""
         try:
             with self.lock:
-                logging.info(f"Checking existence of key: {key}")
+                if hash_key not in self.data_store:
+                    self.data_store[hash_key] = {}
+                self.data_store[hash_key][field] = value
+                logging.info(f"Set {field} in hash {hash_key}: {value}")
+                return "OK"
+        except Exception as e:
+            logging.error(f"Error in HSET {hash_key}: {str(e)}")
+            raise
+
+    def hget(self, hash_key: str, field: str) -> Optional[Any]:
+        """Get value of a field from hash stored at hash_key"""
+        try:
+            with self.lock:
+                hash_data = self.data_store.get(hash_key, {})
+                value = hash_data.get(field)
+                if value is None:
+                    logging.info(f"Field {field} not found in hash {hash_key}")
+                return value
+        except Exception as e:
+            logging.error(f"Error in HGET {hash_key}: {str(e)}")
+            raise
+
+    def hdel(self, hash_key: str, field: str) -> bool:
+        """Delete a field from hash stored at hash_key"""
+        try:
+            with self.lock:
+                hash_data = self.data_store.get(hash_key, {})
+                if field in hash_data:
+                    del hash_data[field]
+                    logging.info(f"Deleted field {field} from hash {hash_key}")
+                    return True
+                logging.info(f"Field {field} not found in hash {hash_key}")
+                return False
+        except Exception as e:
+            logging.error(f"Error in HDEL {hash_key}: {str(e)}")
+            raise
+
+    def hgetall(self, hash_key: str) -> dict:
+        """Get all fields and values of hash stored at hash_key"""
+        try:
+            with self.lock:
+                hash_data = self.data_store.get(hash_key, {})
+                return hash_data
+        except Exception as e:
+            logging.error(f"Error in HGETALL {hash_key}: {str(e)}")
+            raise
+
+    def hdelall(self, hash_key: str) -> bool:
+        """Delete all field in hash"""
+        try:
+            with self.lock:
+                if hash_key in self.data_store:
+                    self.data_store.pop(hash_key)
+                    logging.info(f"Deleted all fields from hash {hash_key}")
+                    return True
+                logging.info(f"Hash {hash_key} does not exist")
+                return False
+        except Exception as e:
+            logging.error(f"Error in HDELALL {hash_key}: {str(e)}")
+            raise
+    # End Hash
+
+    # Sorted sets
+    def zset(self, zset_key: str, score: float, value: Any) -> int:
+        """Add elements to Sorted Set with scores"""
+        try:
+            with self.lock:
+                if zset_key not in self.sorted_sets:
+                    self.sorted_sets[zset_key] = []
+                # Add elements to the Sorted Set, (score, value) is a tuple pair
+                self.sorted_sets[zset_key].append((score, value))
+                # sort
+                self.sorted_sets[zset_key].sort()
+                logging.info(f"Added value {value} with score {score} to ZSET {zset_key}")
+                return 1  
+        except Exception as e:
+            logging.error(f"Error in ZADD {zset_key}: {str(e)}")
+            raise
+
+    def zrange(self, zset_key: str, start: int, end: int) -> List[Any]:
+        """Gets the elements in the Sorted Set from zset_key, according to the specified range"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    start = int(start)
+                    end = int(end)
+                    # Get the range of elements in the sorted set
+                    zset = self.sorted_sets[zset_key]
+                    zset_sorted = sorted(zset, key=lambda x: float(x[0]))
+                    return [value for _, value in zset_sorted[start:end + 1]]
+                logging.warning(f"ZSET {zset_key} không tồn tại.")
+                return []
+        except Exception as e:
+            logging.error(f"Error in ZRANGE {zset_key}: {str(e)}")
+            raise
+
+    def zrevrange(self, zset_key: str, start: int, end: int) -> List[Any]:
+        """Get elements from the Sorted Set, sort them in descending order by score"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    start = int(start)
+                    end = int(end)
+                    
+                    # Get the sorted set and sort by score (convert score to float), descending order
+                    zset = self.sorted_sets[zset_key]
+                    zset_sorted_desc = sorted(zset, key=lambda x: float(x[0]), reverse=True)
+                    
+                    # Return only the values within the specified range
+                    return [value for _, value in zset_sorted_desc[start:end + 1]]
+                
+                logging.warning(f"ZSET {zset_key} không tồn tại.")
+                return []
+        except Exception as e:
+            logging.error(f"Error in ZREVRANGE {zset_key}: {str(e)}")
+            raise
+
+    def zdelvalue(self, zset_key: str, value: Any) -> int:
+        """Delete elements in the Sorted Set"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    # Find and remove elements from the Sorted Set
+                    zset = self.sorted_sets[zset_key]
+                    self.sorted_sets[zset_key] = [item for item in zset if item[1] != value]
+                    logging.info(f"Removed value {value} from ZSET {zset_key}")
+                    return 1  
+                logging.warning(f"ZSET {zset_key} không tồn tại.")
+                return 0
+        except Exception as e:
+            logging.error(f"Error in ZREM {zset_key}: {str(e)}")
+            raise
+
+    def zdelkey(self, zset_key: str) -> int:
+        """Delete the entire Sorted Set identified by zset_key"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    del self.sorted_sets[zset_key]  # Delete the entire ZSET
+                    logging.info(f"Deleted entire ZSET {zset_key}")
+                    return 1  # Return 1 to indicate successful deletion
+                logging.warning(f"ZSET {zset_key} không tồn tại.")
+                return 0  # Return 0 if ZSET doesn't exist
+        except Exception as e:
+            logging.error(f"Error in ZDEL {zset_key}: {str(e)}")
+            raise
+
+
+    def zrank(self, zset_key: str, value: Any) -> Optional[int]:
+        """Check the position of an element in the Sorted Set"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    zset = self.sorted_sets[zset_key]
+                    for idx, (score, item) in enumerate(zset):
+                        if item == value:
+                            logging.info(f"Rank of {value} in ZSET {zset_key}: {idx}")
+                            return idx
+                logging.warning(f"Value {value} not found in ZSET {zset_key}")
+                return None
+        except Exception as e:
+            logging.error(f"Error in ZRANK {zset_key}: {str(e)}")
+            raise
+
+    def zgetall(self, zset_key: str) -> List[tuple]:
+        """Get all the elements in the Sorted Set"""
+        try:
+            with self.lock:
+                if zset_key in self.sorted_sets:
+                    return self.sorted_sets[zset_key]
+                logging.warning(f"ZSET {zset_key} không tồn tại.")
+                return []
+        except Exception as e:
+            logging.error(f"Error in ZGETALL {zset_key}: {str(e)}")
+            raise
+    # End Sorted sets
+
+    # Start List
+    def _get_list(self, key):   
+        """Helper method to get a list from the data store."""
+        if key not in self.data_store:
+            self.data_store[key] = []
+        elif not isinstance(self.data_store[key], list):
+            raise TypeError(f"Key '{key}' does not hold a list.")
+        return self.data_store[key]
+    
+    def lpush(self, key, *values):
+        """Push values to the head of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            for value in reversed(values):  # Maintain LPUSH semantics
+                lst.insert(0, value)
+        return len(lst)
+
+    def rpush(self, key, *values):
+        """Push values to the tail of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            lst.extend(values)
+        return len(lst)
+
+    def lpop(self, key):
+        """Pop a value from the head of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            if not lst:
+                return None
+            return lst.pop(0)
+
+    def rpop(self, key):
+        """Pop a value from the tail of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            if not lst:
+                return None
+            return lst.pop()
+
+    def lrange(self, key, start, stop):
+        """Get a subrange from the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            start = int(start)
+            stop = int(stop)
+            return lst[start:stop + 1]
+
+
+    def llen(self, key):
+        """Get the length of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            return len(lst)
+        
+    def delpush(self, key):
+        """
+        Delete the entire key and push new values to a list (head by default).
+        """
+        with self.lock_list:
+            # Remove the existing key if it exists
+            self.data_store.pop(key, None)
+
+        return "Success"
+        
+    # End list
+
+    def exists(self, key: str) -> bool:
+        try:
+            with self.lock:
+                logging.info(f"Checking existence of key: {key}") 
                 if key in self.data_store:
-                    logging.info(f"Key {key} exists.")
-                    return f"Exist {key}"  # Corrected string interpolation
+                    # Check if the key has expired
+                    if key in self.expiry_times and self.expiry_times[key] <= time.time():
+                        # If it has expired, delete the key from data_store and Expiration_times
+                        self.data_store.pop(key, None)
+                        self.expiry_times.pop(key, None)
+                        logging.info(f"Key {key} is expired and removed.")
+                        return False
+                    logging.info(f"Key {key} exists and is valid.")
+                    return True
                 logging.info(f"Key {key} does not exist.")
-                return f"Does not exist {key}"  # Corrected string interpolation
+                return False
         except Exception as e:
             logging.error(f"Error checking existence of key {key}: {str(e)}")
             raise
-
