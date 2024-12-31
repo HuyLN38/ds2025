@@ -5,10 +5,12 @@ import json
 import os
 from typing import Any, Dict, Optional
 import logging
+from collections import defaultdict
 
-class RedisClone:
+class FaultTolerantRedisClone:
     def __init__(self, snapshot_interval: int = 30, snapshot_file: str = "redis_snapshot.json"):
         self.data_store: Dict[str, Any] = {}
+        self.expiry_times: Dict[str, float] = {}  # Lưu thời gian hết hạn cho các key
         self.lock = threading.RLock()  # Reentrant lock for thread safety
         self.snapshot_interval = snapshot_interval
         self.snapshot_file = snapshot_file
@@ -24,16 +26,39 @@ class RedisClone:
         # Load existing data if available
         self._load_snapshot()
         
+        # Xử lí key hết hạn 
+        self.cleanup_thread = threading.Thread(target=self._cleanup_expired_keys, daemon=True)
+        self.cleanup_thread.start()
+
         # Start background snapshot thread
         self.snapshot_thread = threading.Thread(target=self._periodic_snapshot, daemon=True)
         self.snapshot_thread.start()
+
+    def _cleanup_expired_keys(self):
+        """Xóa các key đã hết hạn"""
+        while True:
+            time.sleep(1)  # Kiểm tra mỗi giây
+            with self.lock:
+                current_time = time.time()
+                expired_keys = [
+                    key for key, expire_time in self.expiry_times.items()
+                    if expire_time <= current_time
+                ]
+                for key in expired_keys:
+                    self.data_store.pop(key, None)
+                    self.expiry_times.pop(key, None)
+                    logging.info(f"Key expired and removed: {key}")
 
     def _load_snapshot(self) -> None:
         """Load data from snapshot file if it exists."""
         try:
             if os.path.exists(self.snapshot_file):
                 with open(self.snapshot_file, 'r') as f:
-                    self.data_store = json.load(f)
+                    snapshot_data = json.load(f)
+                    self.data_store = snapshot_data.get('data', {})
+                    self.expiry_times = {
+                        k: float(v) for k, v in snapshot_data.get('expiry', {}).items()
+                    }
                 logging.info(f"Loaded snapshot from {self.snapshot_file}")
         except Exception as e:
             logging.error(f"Error loading snapshot: {str(e)}")
@@ -42,8 +67,12 @@ class RedisClone:
         """Save current data store to snapshot file."""
         try:
             with self.lock:
+                snapshot_data = {
+                    'data': self.data_store,
+                    'expiry': self.expiry_times
+                }
                 with open(self.snapshot_file, 'w') as f:
-                    json.dump(self.data_store, f)
+                    json.dump(snapshot_data, f)
             self.last_snapshot_time = time.time()
             logging.info("Snapshot saved successfully")
         except Exception as e:
@@ -56,12 +85,18 @@ class RedisClone:
             if time.time() - self.last_snapshot_time >= self.snapshot_interval:
                 self._save_snapshot()
 
-    def set(self, key: str, value: Any) -> str:
-        """Set key-value pair with error handling and logging."""
+    def set(self, key: str, value: Any, ex: Optional[int] = None) -> str:
+        """Set key-value pair with optional expiry time."""
         try:
             with self.lock:
                 self.data_store[key] = value
-                logging.info(f"Set key: {key}")
+                if ex is not None:
+                    self.expiry_times[key] = time.time() + int(ex)
+                    logging.info(f"Set key {key} with {ex} seconds TTL")
+                else:
+                    # Remove any existing TTL
+                    self.expiry_times.pop(key, None)
+                    logging.info(f"Set key {key} without TTL")
                 return "OK"
         except Exception as e:
             logging.error(f"Error setting key {key}: {str(e)}")
@@ -71,6 +106,11 @@ class RedisClone:
         """Get value for key with error handling."""
         try:
             with self.lock:
+                if key in self.expiry_times:
+                    if time.time() >= self.expiry_times[key]:
+                        self.data_store.pop(key, None)
+                        self.expiry_times.pop(key)
+                        return None
                 value = self.data_store.get(key)
                 if value is None:
                     logging.info(f"Key not found: {key}")
@@ -84,6 +124,7 @@ class RedisClone:
         try:
             with self.lock:
                 value = self.data_store.pop(key, None)
+                self.expiry_times.pop(key, None)
                 if value is not None:
                     logging.info(f"Deleted key: {key}")
                 return value
@@ -95,7 +136,12 @@ class RedisClone:
         """Get all keys with error handling."""
         try:
             with self.lock:
-                return list(self.data_store.keys())
+                # Only return non-expired keys
+                current_time = time.time()
+                return [
+                    key for key in self.data_store.keys()
+                    if key not in self.expiry_times or self.expiry_times[key] > current_time
+                ]
         except Exception as e:
             logging.error(f"Error getting keys: {str(e)}")
             raise
@@ -105,6 +151,7 @@ class RedisClone:
         try:
             with self.lock:
                 self.data_store.clear()
+                self.expiry_times.clear()
                 self._save_snapshot()  # Save empty state
                 logging.info("Executed FLUSHALL command")
                 return "OK"
@@ -132,3 +179,76 @@ class RedisClone:
         except Exception as e:
             logging.error(f"Error appending to key {key}: {str(e)}")
             raise
+
+    def expire(self, key: str, seconds: int) -> bool:
+        """Set TTL (time to live) for a key."""
+        try:
+            with self.lock:
+                if key in self.data_store:
+                    self.expiry_times[key] = time.time() + int(seconds)
+                    logging.info(f"Set TTL for key {key}: {seconds} seconds")
+                    return True
+                logging.info(f"Key {key} not found for expire")
+                return False
+        except Exception as e:
+            logging.error(f"Error setting expire for key {key}: {str(e)}")
+            raise
+
+    def ttl(self, key: str) -> int:
+        """Get remaining TTL (time to live) for a key."""
+        try:
+            with self.lock:
+                if key not in self.data_store:
+                    logging.info(f"Key {key} not found for TTL check")
+                    return -2  # Key không tồn tại
+                
+                if key not in self.expiry_times:
+                    logging.info(f"Key {key} has no TTL set")
+                    return -1  # Key không có TTL
+                
+                remaining = int(self.expiry_times[key] - time.time())
+                if remaining <= 0:
+                    # Key đã hết hạn
+                    self.data_store.pop(key, None)
+                    self.expiry_times.pop(key, None)
+                    logging.info(f"Key {key} expired during TTL check")
+                    return -2
+                    
+                return remaining
+        except Exception as e:
+            logging.error(f"Error checking TTL for key {key}: {str(e)}")
+            raise
+
+    def persist(self, key: str) -> bool:
+        """Remove TTL from a key."""
+        try:
+            with self.lock:
+                if key not in self.data_store:
+                    logging.info(f"Key {key} not found for persist")
+                    return False
+                    
+                if key not in self.expiry_times:
+                    logging.info(f"Key {key} already has no TTL")
+                    return False
+                    
+                self.expiry_times.pop(key)
+                logging.info(f"Removed TTL for key {key}")
+                return True
+        except Exception as e:
+            logging.error(f"Error persisting key {key}: {str(e)}")
+            raise
+
+    def exists(self, key: str) -> str:
+        """Check key exists in data store."""
+        try:
+            with self.lock:
+                logging.info(f"Checking existence of key: {key}")
+                if key in self.data_store:
+                    logging.info(f"Key {key} exists.")
+                    return f"Exist {key}"  # Corrected string interpolation
+                logging.info(f"Key {key} does not exist.")
+                return f"Does not exist {key}"  # Corrected string interpolation
+        except Exception as e:
+            logging.error(f"Error checking existence of key {key}: {str(e)}")
+            raise
+
