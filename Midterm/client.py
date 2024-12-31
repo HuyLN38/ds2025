@@ -27,6 +27,8 @@ def main():
             try:
                 if cmd in ["set", "get", "delete", "append", "keys", "flushall", 
                           "expire", "ttl", "persist", "exists", 
+                          "hset", "hget", "hdel", "hgetall", "hdelall",
+                           "zset",  "zrange", "zrevrange", "zdelvalue", "zdelkey", "zrank", "zgetall"
                           ]:
                     if cmd == "set" and len(args) >= 4 and args[-2].lower() == "ex":
                         key, value = args[0], args[1]
