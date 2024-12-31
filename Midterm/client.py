@@ -25,9 +25,26 @@ def main():
                 cmd = "delete"
 
             try:
-                if cmd in ["set", "get", "delete", "append", "keys", "flushall"]:
-                    method = getattr(client, cmd)
-                    result = method(*args)
+                if cmd in ["set", "get", "delete", "append", "keys", "flushall", 
+                          "expire", "ttl", "persist", "exists", 
+                          "hset", "hget", "hdel", "hgetall", "hdelall",
+                           "zset",  "zrange", "zrevrange", "zdelvalue", "zdelkey", "zrank", "zgetall",
+                          ]:
+                    if cmd == "set" and len(args) >= 4 and args[-2].lower() == "ex":
+                        key, value = args[0], args[1]
+                        ex = int(args[-1])
+                        result = client.set(key, value, ex=ex)
+                    else:
+                        method = getattr(client, cmd)
+                        result = method(*args)
+
+                    # Handle special TTL cases
+                    if cmd == "ttl":
+                        if result == -2:
+                            result= "Key does not exist."
+                        elif result == -1:
+                            result="Key exists but has no expiration."
+                        
                     print(result)
                 else:
                     print("Unknown command.")
