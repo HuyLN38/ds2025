@@ -9,6 +9,6 @@ Students are expected to:
 Student Info
 =========================
 
-* Student Name: Nguyen Nhu Duy
-* Student ID: 22BI13123
+* Student Name: Le Tuan Dat
+* Student ID: 22BI13077
 * Student Group ID: 5

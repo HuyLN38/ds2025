@@ -1,0 +1,5 @@
+2024-12-31 15:01:23,002 - INFO - Snapshot saved successfully
+2024-12-31 15:03:19,972 - INFO - Loaded snapshot from redis_snapshot.json
+2024-12-31 15:03:30,767 - INFO - Set key: dat
+2024-12-31 15:03:49,975 - INFO - Snapshot saved successfully
+2024-12-31 15:04:19,976 - INFO - Snapshot saved successfully
