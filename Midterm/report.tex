@@ -1,0 +1,276 @@
+\documentclass[11pt]{article}
+\usepackage{graphicx}
+\usepackage{listings}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{enumitem}
+\usepackage{url}
+\usepackage{color}
+\usepackage{listings}
+
+\lstset{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    language=Python
+}
+
+\title{Implementation of a Fault-Tolerant Key-Value\\Server Using RPC: A Redis Clone\\Comprehensive Report}
+\author{Technical Report}
+\date{December 31, 2024}
+
+\begin{document}
+
+\maketitle
+
+\section{Introduction}
+This report details the implementation of a fault-tolerant key-value server that replicates core Redis functionality. The system emphasizes reliability and data consistency while providing a comprehensive set of data structures and operations through a Remote Procedure Call (RPC) interface.
+
+\section{System Architecture}
+
+\subsection{Core Components}
+The system consists of four main components:
+
+\begin{enumerate}
+    \item \textbf{RPC Server}
+    \begin{itemize}
+        \item Handles client connections and method invocations
+        \item Uses thread pools for concurrent client handling
+        \item Manages method registration and execution
+    \end{itemize}
+
+    \item \textbf{RPC Client}
+    \begin{itemize}
+        \item Provides interface for client-server communication
+        \item Handles connection management
+        \item Implements JSON-based protocol
+    \end{itemize}
+
+    \item \textbf{Redis Clone Implementation}
+    \begin{itemize}
+        \item Core key-value store functionality
+        \item Thread-safe operations
+        \item Data persistence mechanisms
+    \end{itemize}
+
+    \item \textbf{Client Interface}
+    \begin{itemize}
+        \item Command-line interface for user interaction
+        \item Support for all Redis-like commands
+        \item Error handling and validation
+    \end{itemize}
+\end{enumerate}
+
+\subsection{Communication Protocol}
+\begin{itemize}
+    \item JSON-based RPC protocol
+    \item Request Format: \texttt{(method\_name, args, kwargs)}
+    \item Response Format: JSON-encoded return value
+    \item Transport: TCP/IP sockets with fixed buffer size (1024 bytes)
+\end{itemize}
+
+\section{Data Structures and Operations}
+
+\subsection{Key-Value Operations}
+Basic operations supported:
+\begin{itemize}
+    \item \texttt{SET key value [EX seconds]}: Store key-value pair with optional  \\ expiry
+    \item \texttt{GET key}: Retrieve value
+    \item \texttt{DELETE key}: Remove key-value pair
+    \item \texttt{KEYS}: List all keys
+    \item \texttt{FLUSHALL}: Clear all data
+    \item \texttt{APPEND key value}: Append to existing string value
+    \item \texttt{EXISTS key}: Check key existence
+\end{itemize}
+
+\subsection{Time-To-Live (TTL) Operations}
+\begin{itemize}
+    \item \texttt{EXPIRE key seconds}: Set key expiration time
+    \item \texttt{TTL key}: Get remaining time
+    \begin{itemize}
+        \item Returns -2 if key doesn't exist
+        \item Returns -1 if key has no expiration
+    \end{itemize}
+    \item \texttt{PERSIST key}: Remove expiration from key
+\end{itemize}
+
+\subsection{Hash Operations}
+\begin{itemize}
+    \item \texttt{HSET hash\_key field value}: Set field in hash
+    \item \texttt{HGET hash\_key field}: Get field value
+    \item \texttt{HDEL hash\_key field}: Delete field
+    \item \texttt{HGETALL hash\_key}: Get all fields and values
+    \item \texttt{HDELALL hash\_key}: Delete entire hash
+\end{itemize}
+
+\subsection{Sorted Set Operations}
+\begin{itemize}
+    \item \texttt{ZSET key score value}: Add element with score
+    \item \texttt{ZRANGE key start stop}: Get range (low to high)
+    \item \texttt{ZREVRANGE key start stop}: Get range (high to low)
+    \item \texttt{ZRANK key value}: Get element rank
+    \item \texttt{ZDELVALUE key value}: Remove element
+    \item \texttt{ZDELKEY key}: Delete entire sorted set
+    \item \texttt{ZGETALL key}: Get all elements with scores
+\end{itemize}
+
+\subsection{List Operations}
+\begin{itemize}
+    \item \texttt{LPUSH/RPUSH key value [value ...]}: Add elements
+    \item \texttt{LPOP/RPOP key}: Remove and return element
+    \item \texttt{LRANGE key start stop}: Get range of elements
+    \item \texttt{LLEN key}: Get list length
+    \item \texttt{DELPUSH key}: Clear and reinitialize list
+\end{itemize}
+
+\section{Fault Tolerance Mechanisms}
+
+\subsection{Thread Safety}
+\begin{itemize}
+    \item Reentrant locks (RLock) for data store operations
+    \item Separate locks for list operations
+    \item Atomic operations for data modifications
+    \item Thread-safe method registration and invocation
+\end{itemize}
+
+\subsection{Data Persistence}
+\begin{itemize}
+    \item Periodic snapshots to disk (default 30-second interval)
+    \item Background thread for snapshot management
+    \item JSON-based snapshot format:
+\end{itemize}
+
+\begin{lstlisting}
+snapshot_data = {
+    'data': self.data_store,
+    'expiry': self.expiry_times,
+    'sorted_sets': self.sorted_sets 
+}
+\end{lstlisting}
+
+\subsection{Error Handling}
+\begin{itemize}
+    \item Comprehensive exception handling for all operations
+    \item Logging system with operation tracking
+    \item Graceful handling of network failures
+    \item Type checking and validation
+    \item Automatic cleanup of expired keys
+\end{itemize}
+
+\section{Implementation Details}
+
+\subsection{Thread Management}
+\begin{lstlisting}
+# Server thread pool
+Thread(target=self.__handle__, args=[client, address]).start()
+
+# Background threads
+self.cleanup_thread = threading.Thread(
+    target=self._cleanup_expired_keys, 
+    daemon=True
+)
+self.snapshot_thread = threading.Thread(
+    target=self._periodic_snapshot, 
+    daemon=True
+)
+\end{lstlisting}
+
+\subsection{Data Store Structure}
+\begin{lstlisting}
+class FaultTolerantRedisClone:
+    def __init__(self):
+        self.data_store: Dict[str, Any] = {}
+        self.sorted_sets: Dict[str, List[tuple]] = {} 
+        self.expiry_times: Dict[str, float] = {} 
+        self.lock = threading.RLock()
+        self.lock_list = threading.Lock()
+\end{lstlisting}
+
+\section{Performance Considerations}
+
+\subsection{Memory Management}
+\begin{itemize}
+    \item In-memory storage with disk persistence
+    \item Efficient string operations
+    \item Memory-conscious data structures
+    \item Background cleanup of expired keys
+\end{itemize}
+
+\subsection{Network Efficiency}
+\begin{itemize}
+    \item JSON serialization for data transport
+    \item Fixed buffer size management
+    \item Connection pooling for multiple clients
+\end{itemize}
+
+\section{Reliability Features}
+
+\subsection{Data Integrity}
+\begin{itemize}
+    \item Atomic operations for data consistency
+    \item Snapshot verification on load
+    \item Transaction logging
+    \item Type validation
+\end{itemize}
+
+\subsection{Recovery Mechanisms}
+\begin{itemize}
+    \item Automatic snapshot recovery
+    \item Connection failure handling
+    \item Error state recovery
+    \item Expired key cleanup
+\end{itemize}
+
+\section{Client Interface Example}
+\begin{lstlisting}
+# Basic operations
+Redis Clone Client
+Type your commands (e.g., `SET key value`) or type `EXIT` to quit.
+> SET mykey distributed
+OK
+> GET mykey  
+distributed
+> DEL mykey
+distributed
+>GET mykey
+None
+
+
+# Hash operations
+> HSET student name kious
+OK
+> HSET student age 19
+OK
+> HGETALL student
+{'name': 'kious', 'age': '19'}
+
+# Sorted set operations
+> ZSET scores 100 alice
+1
+> ZSET scores 20 bob
+1
+> ZSET scores 50 kious
+1
+> ZRANGE scores 0 3
+['bob', 'kious', 'alice']
+>EXIST
+Goodbye!
+
+\end{lstlisting}
+
+\section{Future Improvements}
+
+Potential enhancements include:
+\begin{itemize}
+    \item Data replication for high availability
+    \item Support for additional complex data types
+    \item Transaction support
+    \item Incremental backup system
+    \item Connection pooling optimization
+    \item Cluster support
+\end{itemize}
+
+\section{Conclusion}
+Fault-tolerant key-value server implementations provide a powerful and  \\efficient solution to key-value storage needs. Integration of comprehensive data structure support tree safety Database stability and error handling This makes it suitable for production applications that require Redis-like  \\applications. Although not as versatile as Redis itself, it provides a solid foundation for space-hungry distributed systems. Reliable storage and  \\access to data
+
+\end{document}
