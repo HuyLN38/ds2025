@@ -28,7 +28,6 @@ class FaultTolerantRedisClone:
         # Load existing data if available
         self._load_snapshot()
         
-        # Xử lí key hết hạn 
         self.cleanup_thread = threading.Thread(target=self._cleanup_expired_keys, daemon=True)
         self.cleanup_thread.start()
 
@@ -241,6 +240,7 @@ class FaultTolerantRedisClone:
         except Exception as e:
             logging.error(f"Error persisting key {key}: {str(e)}")
             raise
+
     def hset(self, hash_key: str, field: str, value: Any) -> str:   
         """Set a field in a hash stored at hash_key"""
         try:
@@ -333,7 +333,9 @@ class FaultTolerantRedisClone:
                     end = int(end)
                     # Get the range of elements in the sorted set
                     zset = self.sorted_sets[zset_key]
-                    return [value for _ , value in zset[start:end+1]]
+                    zset_sorted = sorted(zset, key=lambda x: float(x[0]))
+                    return [value for _, value in zset_sorted[start:end + 1]]
+
                 logging.warning(f"ZSET {zset_key} không tồn tại.")
                 return []
         except Exception as e:
@@ -346,10 +348,16 @@ class FaultTolerantRedisClone:
             with self.lock:
                 if zset_key in self.sorted_sets:
                     start = int(start)
-                    stop = int(stop)
-                    # Gets the range of elements in the sorted set in descending order
+                    end = int(end)
+                    
+                    # Get the sorted set and sort by score (convert score to float), descending order
                     zset = self.sorted_sets[zset_key]
-                    return [value for score, value in reversed(zset[start:end+1])]
+                    zset_sorted_desc = sorted(zset, key=lambda x: float(x[0]), reverse=True)
+                    
+                    # Return only the values within the specified range
+                    return [value for _, value in zset_sorted_desc[start:end + 1]]
+                
+
                 logging.warning(f"ZSET {zset_key} không tồn tại.")
                 return []
         except Exception as e:
@@ -415,6 +423,72 @@ class FaultTolerantRedisClone:
             logging.error(f"Error in ZGETALL {zset_key}: {str(e)}")
             raise
     # End Sorted sets
+
+    def _get_list(self, key):   
+        """Helper method to get a list from the data store."""
+        if key not in self.data_store:
+            self.data_store[key] = []
+        elif not isinstance(self.data_store[key], list):
+            raise TypeError(f"Key '{key}' does not hold a list.")
+        return self.data_store[key]
+    
+    def lpush(self, key, *values):
+        """Push values to the head of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            for value in reversed(values):  # Maintain LPUSH semantics
+                lst.insert(0, value)
+        return len(lst)
+
+    def rpush(self, key, *values):
+        """Push values to the tail of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            lst.extend(values)
+        return len(lst)
+
+    def lpop(self, key):
+        """Pop a value from the head of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            if not lst:
+                return None
+            return lst.pop(0)
+
+    def rpop(self, key):
+        """Pop a value from the tail of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            if not lst:
+                return None
+            return lst.pop()
+
+    def lrange(self, key, start, stop):
+        """Get a subrange from the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            start = int(start)
+            stop = int(stop)
+            return lst[start:stop + 1]
+
+
+    def llen(self, key):
+        """Get the length of the list."""
+        with self.lock_list:
+            lst = self._get_list(key)
+            return len(lst)
+        
+    def delpush(self, key):
+        """
+        Delete the entire key and push new values to a list (head by default).
+        """
+        with self.lock_list:
+            # Remove the existing key if it exists
+            self.data_store.pop(key, None)
+
+        return "Success"
+        
+    # End list
 
     def exists(self, key: str) -> bool:
         try:
