@@ -9,6 +9,6 @@ Students are expected to:
 Student Info
 =========================
 
-* Student Name: Nguyễn Duy Nghĩa
-* Student ID: 22BI13331
+* Student Name: Lý Nhật Huy
+* Student ID: 22BI13191
 * Student Group ID: 5
